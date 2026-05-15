@@ -16,52 +16,22 @@ var world_angle=60,
 var GAME = {};
 var selectedVehicle = null;
 
-// Vehicle selection options.
-// Keep the classic procedural car as a guaranteed fallback.
-// Replace the modelPath values below with the exact .glb paths you uploaded to the repo.
-var VEHICLE_OPTIONS = [
-	{
-		id: 'classic',
-		name: 'Classic Car',
-		description: 'Original built-in Night Drive car.',
-		modelPath: null,
-		scale: 1,
-		rotation: {x: 0, y: 0, z: 0},
-		position: {x: 0, y: 0, z: 0}
-	},
-	{
-		id: 'vehicle-1',
-		name: 'Vehicle 1',
-		description: 'GLB vehicle slot 1.',
-		modelPath: 'models/vehicle-1.glb',
-		scale: 28,
-		rotation: {x: 0, y: Math.PI, z: 0},
-		position: {x: 0, y: 6, z: 0}
-	},
-	{
-		id: 'vehicle-2',
-		name: 'Vehicle 2',
-		description: 'GLB vehicle slot 2.',
-		modelPath: 'models/vehicle-2.glb',
-		scale: 28,
-		rotation: {x: 0, y: Math.PI, z: 0},
-		position: {x: 0, y: 6, z: 0}
-	},
-	{
-		id: 'vehicle-3',
-		name: 'Vehicle 3',
-		description: 'GLB vehicle slot 3.',
-		modelPath: 'models/vehicle-3.glb',
-		scale: 28,
-		rotation: {x: 0, y: Math.PI, z: 0},
-		position: {x: 0, y: 6, z: 0}
-	}
-];
+var REPO_FULL_NAME = 'msgetsonmynervez/Ms-driver';
+var REPO_BRANCH = 'master';
+var MODELS_FOLDER = 'models';
+var GITHUB_MODELS_API_URL = 'https://api.github.com/repos/' + REPO_FULL_NAME + '/contents/' + MODELS_FOLDER + '?ref=' + REPO_BRANCH;
 
-function init(){
+// Vehicle selection options are loaded dynamically from the repo's models/ folder.
+// The Classic Car option is always included as a fallback.
+var VEHICLE_OPTIONS = [create_classic_vehicle_option()];
+
+async function init(){
 
 	GAME = initialize_game();
 	selectedVehicle = get_selected_vehicle();
+
+	// Load every .glb file from /models into the vehicle selector.
+	await load_vehicle_options_from_models_folder();
 
 	// Initialize audio
 	context = new AudioContext();
@@ -111,6 +81,68 @@ function init(){
 	// start game loop
 	game_loop();
 	
+}
+
+function create_classic_vehicle_option(){
+	return {
+		id: 'classic',
+		name: 'Classic Car',
+		description: 'Original built-in Night Drive car.',
+		modelPath: null,
+		scale: 1,
+		rotation: {x: 0, y: 0, z: 0},
+		position: {x: 0, y: 0, z: 0}
+	};
+}
+
+function create_glb_vehicle_option(fileName){
+	var cleanName = fileName.replace(/\.glb$/i, '').replace(/[-_]+/g, ' ');
+	cleanName = cleanName.replace(/\b\w/g, function(letter){ return letter.toUpperCase(); });
+
+	return {
+		id: 'glb-' + fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+		name: cleanName,
+		description: fileName,
+		modelPath: MODELS_FOLDER + '/' + fileName,
+		scale: 28,
+		rotation: {x: 0, y: Math.PI, z: 0},
+		position: {x: 0, y: 6, z: 0}
+	};
+}
+
+async function load_vehicle_options_from_models_folder(){
+	try{
+		var response = await fetch(GITHUB_MODELS_API_URL, {cache: 'no-store'});
+
+		if(!response.ok){
+			throw new Error('Unable to read models folder. Status: ' + response.status);
+		}
+
+		var files = await response.json();
+
+		if(!Array.isArray(files)){
+			throw new Error('Models folder response was not a file list.');
+		}
+
+		var glbFiles = files
+			.filter(function(file){
+				return file && file.type === 'file' && /\.glb$/i.test(file.name);
+			})
+			.map(function(file){ return file.name; })
+			.sort(function(a, b){ return a.localeCompare(b); });
+
+		VEHICLE_OPTIONS = [create_classic_vehicle_option()].concat(
+			glbFiles.map(function(fileName){ return create_glb_vehicle_option(fileName); })
+		);
+
+		selectedVehicle = get_selected_vehicle();
+		console.log('Loaded vehicle options:', VEHICLE_OPTIONS);
+	}
+	catch(error){
+		console.warn('Falling back to Classic Car only. Could not load .glb files from models folder:', error);
+		VEHICLE_OPTIONS = [create_classic_vehicle_option()];
+		selectedVehicle = VEHICLE_OPTIONS[0];
+	}
 }
 
 function get_selected_vehicle(){
@@ -217,10 +249,14 @@ function apply_selected_vehicle_to_car(carObject){
 
 	set_procedural_car_visibility(carObject, false);
 
+	var requestedVehicleId = selectedVehicle.id;
 	var loader = new THREE.GLTFLoader();
 	loader.load(
 		selectedVehicle.modelPath,
 		function(gltf){
+			// Ignore stale model loads if the player picked another vehicle before this one finished loading.
+			if(!selectedVehicle || selectedVehicle.id !== requestedVehicleId) return;
+
 			var model = gltf.scene;
 			model.name = 'selected-glb-vehicle';
 			model.scale.set(selectedVehicle.scale, selectedVehicle.scale, selectedVehicle.scale);
